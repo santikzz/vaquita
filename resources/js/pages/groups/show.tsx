@@ -1,5 +1,5 @@
 import { Link, router } from '@inertiajs/react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Drawer, DrawerContent, DrawerTitle } from '@/components/ui/drawer';
 import { AppShell, BackButton, Fab } from '@/components/web/app-shell';
 import { ConfirmDrawer } from '@/components/web/confirm-drawer';
@@ -130,13 +130,17 @@ function EventsTab({ group, events }: { group: GroupData; events: EventListItem[
     );
 }
 
-function MembersTab({ group, members }: { group: GroupData; members: MemberData[] }) {
+function MembersTab({ group, members: initialMembers }: { group: GroupData; members: MemberData[] }) {
+    const [members, setMembers] = useState(initialMembers);
     const [guestOpen, setGuestOpen] = useState(false);
     const [guestName, setGuestName] = useState('');
     const [adding, setAdding] = useState(false);
     const [, copy] = useClipboard();
     const [copied, setCopied] = useState(false);
     const [copiedAlias, setCopiedAlias] = useState<string | null>(null);
+
+    // keep local list in sync with server props after each reconcile
+    useEffect(() => setMembers(initialMembers), [initialMembers]);
 
     const inviteUrl = `${window.location.origin}/join/${group.invite_code}`;
 
@@ -148,15 +152,34 @@ function MembersTab({ group, members }: { group: GroupData; members: MemberData[
     };
 
     const addGuest = () => {
-        if (!guestName.trim() || adding) return;
+        const nickname = guestName.trim();
+        if (!nickname || adding) return;
         setAdding(true);
+
+        const optimistic: MemberData = {
+            uuid: `temp-${crypto.randomUUID()}`,
+            display_name: nickname,
+            avatar: null,
+            payment_alias: null,
+            is_guest: true,
+            is_active: true,
+            is_me: false,
+            role: 'member',
+        };
+        setMembers((prev) => [...prev, optimistic]);
+        setGuestName('');
+        setGuestOpen(false);
+
         router.post(
             `/groups/${group.uuid}/members`,
-            { nickname: guestName.trim() },
+            { nickname },
             {
-                onSuccess: () => {
-                    setGuestName('');
-                    setGuestOpen(false);
+                preserveScroll: true,
+                only: ['members', 'balances'],
+                onError: () => {
+                    setMembers((prev) => prev.filter((m) => m.uuid !== optimistic.uuid));
+                    setGuestName(nickname);
+                    setGuestOpen(true);
                 },
                 onFinish: () => setAdding(false),
             },
@@ -204,11 +227,17 @@ function MembersTab({ group, members }: { group: GroupData; members: MemberData[
                         )}
                         {group.is_owner && member.role !== 'owner' && member.is_active && (
                             <ConfirmDrawer
-                                onConfirm={() =>
-                                    new Promise<void>((resolve) =>
-                                        router.delete(`/groups/${group.uuid}/members/${member.uuid}`, { onFinish: () => resolve() }),
-                                    )
-                                }
+                                onConfirm={() => {
+                                    // optimistically deactivate; server may delete or deactivate, reconciled on reload
+                                    setMembers((prev) => prev.map((m) => (m.uuid === member.uuid ? { ...m, is_active: false } : m)));
+                                    router.delete(`/groups/${group.uuid}/members/${member.uuid}`, {
+                                        preserveScroll: true,
+                                        only: ['members', 'balances'],
+                                        onError: () =>
+                                            setMembers((prev) => prev.map((m) => (m.uuid === member.uuid ? { ...m, is_active: true } : m))),
+                                    });
+                                    return Promise.resolve();
+                                }}
                                 title={t('groups:remove_member')}
                                 description={t('groups:remove_member_hint', { name: member.display_name })}
                             >

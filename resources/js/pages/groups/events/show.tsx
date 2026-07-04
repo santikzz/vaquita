@@ -1,5 +1,5 @@
 import { Link, router } from '@inertiajs/react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Drawer, DrawerContent, DrawerTitle } from '@/components/ui/drawer';
 import { AppShell, BackButton, Fab } from '@/components/web/app-shell';
 import { MemberAvatar } from '@/components/web/member-avatar';
@@ -14,7 +14,7 @@ import type {
     SettlementData,
     TransferData,
 } from '@/types/groups';
-import { ArrowRight, Check, CheckCircle2, Copy, HandCoins, Loader2, SquarePen, ReceiptText, Scale, Trash2 } from 'lucide-react';
+import { ArrowRight, Check, CheckCircle2, Copy, HandCoins, SquarePen, ReceiptText, Scale, Trash2 } from 'lucide-react';
 
 interface Props {
     group: { uuid: string; name: string; currency: string };
@@ -185,12 +185,17 @@ interface SettleTabProps {
     hasExpenses: boolean;
 }
 
-function SettleTab({ group, baseUrl, membersByUuid, transfers, settlements, hasExpenses }: SettleTabProps) {
+function SettleTab({ group, baseUrl, membersByUuid, transfers: initialTransfers, settlements: initialSettlements, hasExpenses }: SettleTabProps) {
+    const [transfers, setTransfers] = useState(initialTransfers);
+    const [settlements, setSettlements] = useState(initialSettlements);
     const [confirm, setConfirm] = useState<TransferData | null>(null);
-    const [saving, setSaving] = useState(false);
     const [, copy] = useClipboard();
     const [copied, setCopied] = useState(false);
     const [copiedAlias, setCopiedAlias] = useState<string | null>(null);
+
+    // keep local lists in sync with server props after each reconcile
+    useEffect(() => setTransfers(initialTransfers), [initialTransfers]);
+    useEffect(() => setSettlements(initialSettlements), [initialSettlements]);
 
     const name = (uuid: string) => membersByUuid.get(uuid)?.display_name ?? '?';
     const toMember = confirm ? membersByUuid.get(confirm.to_member_uuid) : null;
@@ -204,18 +209,36 @@ function SettleTab({ group, baseUrl, membersByUuid, transfers, settlements, hasE
     };
 
     const confirmPayment = () => {
-        if (!confirm || saving) return;
-        setSaving(true);
+        if (!confirm) return;
+        const transfer = confirm;
+
+        const optimistic: SettlementData = {
+            uuid: `temp-${crypto.randomUUID()}`,
+            amount_minor: transfer.amount_minor,
+            note: null,
+            settled_at: '',
+            from: { uuid: transfer.from_member_uuid, display_name: name(transfer.from_member_uuid) },
+            to: { uuid: transfer.to_member_uuid, display_name: name(transfer.to_member_uuid) },
+        };
+        // record the payment and drop the matching suggestion right away
+        setSettlements((prev) => [optimistic, ...prev]);
+        setTransfers((prev) => prev.filter((t) => t !== transfer));
+        setConfirm(null);
+
         router.post(
             `${baseUrl}/settlements`,
             {
-                from_member: confirm.from_member_uuid,
-                to_member: confirm.to_member_uuid,
-                amount_minor: confirm.amount_minor,
+                from_member: transfer.from_member_uuid,
+                to_member: transfer.to_member_uuid,
+                amount_minor: transfer.amount_minor,
             },
             {
-                onSuccess: () => setConfirm(null),
-                onFinish: () => setSaving(false),
+                preserveScroll: true,
+                only: ['settlements', 'balances', 'transfers', 'event'],
+                onError: () => {
+                    setSettlements((prev) => prev.filter((s) => s.uuid !== optimistic.uuid));
+                    setTransfers((prev) => [...prev, transfer]);
+                },
             },
         );
     };
@@ -318,7 +341,15 @@ function SettleTab({ group, baseUrl, membersByUuid, transfers, settlements, hasE
                                 <button
                                     type="button"
                                     aria-label={t('common:delete')}
-                                    onClick={() => router.delete(`${baseUrl}/settlements/${settlement.uuid}`)}
+                                    onClick={() => {
+                                        const removed = settlement;
+                                        setSettlements((prev) => prev.filter((s) => s.uuid !== removed.uuid));
+                                        router.delete(`${baseUrl}/settlements/${removed.uuid}`, {
+                                            preserveScroll: true,
+                                            only: ['settlements', 'balances', 'transfers', 'event'],
+                                            onError: () => setSettlements((prev) => [removed, ...prev]),
+                                        });
+                                    }}
                                     className="flex size-8 cursor-pointer items-center justify-center rounded-lg text-muted-foreground hover:text-red-500"
                                 >
                                     <Trash2 className="size-4" />
@@ -367,18 +398,15 @@ function SettleTab({ group, baseUrl, membersByUuid, transfers, settlements, hasE
                                 <button
                                     type="button"
                                     onClick={() => setConfirm(null)}
-                                    disabled={saving}
-                                    className="h-12.5 flex-1 cursor-pointer rounded-[13px] border border-border bg-secondary text-[14.5px] font-semibold active:scale-[0.98] disabled:opacity-50"
+                                    className="h-12.5 flex-1 cursor-pointer rounded-[13px] border border-border bg-secondary text-[14.5px] font-semibold active:scale-[0.98]"
                                 >
                                     {t('common:cancel')}
                                 </button>
                                 <button
                                     type="button"
                                     onClick={confirmPayment}
-                                    disabled={saving}
-                                    className="flex h-12.5 flex-1 cursor-pointer items-center justify-center gap-2 rounded-[13px] bg-primary text-[14.5px] font-semibold text-primary-foreground active:scale-[0.98] disabled:opacity-70"
+                                    className="flex h-12.5 flex-1 cursor-pointer items-center justify-center gap-2 rounded-[13px] bg-primary text-[14.5px] font-semibold text-primary-foreground active:scale-[0.98]"
                                 >
-                                    {saving && <Loader2 className="size-4 animate-spin" />}
                                     {t('groups:confirm_payment')}
                                 </button>
                             </div>
