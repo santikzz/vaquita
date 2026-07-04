@@ -1,0 +1,37 @@
+{
+	frankenphp {
+		max_wait_time 30s
+		max_threads auto
+		php_ini {
+            upload_max_filesize 256M
+            post_max_size 256M
+            memory_limit 2G
+            max_execution_time 30
+            max_input_time 30
+            max_file_uploads 10
+			opcache.enable 1
+			opcache.jit 1255
+			opcache.jit_buffer_size 256M
+			opcache.memory_consumption 256
+			opcache.max_accelerated_files 20000
+			opcache.validate_timestamps 0
+			opcache.revalidate_freq 0
+		}
+	}
+	auto_https off
+    servers {
+        enable_full_duplex
+    }
+}
+:80 {
+	root public/
+	encode zstd br gzip
+	@static {
+        path *.js *.css *.woff2 *.woff *.ttf *.ico *.png *.jpg *.webp *.svg
+    }
+    header @static Cache-Control "public, max-age=31536000, immutable"
+	header -X-Powered-By
+	php_server {
+		try_files {path} index.php
+	}
+}
