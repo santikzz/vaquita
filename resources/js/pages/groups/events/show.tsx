@@ -45,6 +45,7 @@ export default function EventShow({ group, event, participants, expenses, settle
                         {event.can_manage ? (
                             <Link
                                 href={`${baseUrl}/edit`}
+                                prefetch="mount"
                                 aria-label={t('groups:edit_event')}
                                 className="flex size-10 items-center justify-center rounded-xl border border-border"
                             >
@@ -119,6 +120,7 @@ function ExpensesTab({ group, baseUrl, expenses }: { group: { currency: string }
                             <Link
                                 key={expense.uuid}
                                 href={`${baseUrl}/expenses/${expense.uuid}/edit`}
+                                prefetch="mount"
                                 className="flex items-center gap-3 border-b border-border px-3.5 py-3 last:border-b-0"
                             >
                                 <MemberAvatar name={expense.payer.display_name} />

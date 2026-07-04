@@ -34,6 +34,7 @@ export default function GroupShow({ group, members, events, balances }: Props) {
                         {group.is_owner ? (
                             <Link
                                 href={`/groups/${group.uuid}/edit`}
+                                prefetch="mount"
                                 aria-label={t('groups:edit_group')}
                                 className="flex size-10 items-center justify-center rounded-xl border border-border active:scale-95"
                             >
@@ -107,6 +108,7 @@ function EventsTab({ group, events }: { group: GroupData; events: EventListItem[
                 <Link
                     key={event.uuid}
                     href={`/groups/${group.uuid}/events/${event.uuid}`}
+                    prefetch="mount"
                     className="flex items-center justify-between gap-2.5 rounded-2xl border border-border bg-card px-4 py-3.5 transition-transform active:scale-[0.98]"
                 >
                     <div>

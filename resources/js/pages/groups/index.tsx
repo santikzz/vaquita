@@ -23,6 +23,7 @@ export default function GroupsIndex({ groups }: Props) {
                         <Link
                             key={group.uuid}
                             href={`/groups/${group.uuid}`}
+                            prefetch="mount"
                             className="block rounded-2xl border border-border bg-card p-4 text-left transition-transform active:scale-[0.98]"
                         >
                             <div className="flex items-start justify-between gap-2.5">
@@ -102,6 +103,7 @@ export default function GroupsIndex({ groups }: Props) {
                 </Drawer>
                 <Link
                     href="/groups/quick"
+                    prefetch="mount"
                     className="flex h-12 items-center justify-center rounded-2xl border border-border bg-card text-[14.5px] font-semibold"
                 >
                     {t('groups:quick_split')}

@@ -31,7 +31,7 @@ export function Breadcrumbs({
                                             </BreadcrumbPage>
                                         ) : (
                                             <BreadcrumbLink asChild>
-                                                <Link href={item.href}>
+                                                <Link href={item.href} prefetch="mount">
                                                     {item.title}
                                                 </Link>
                                             </BreadcrumbLink>

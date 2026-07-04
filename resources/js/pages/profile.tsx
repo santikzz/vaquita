@@ -39,6 +39,7 @@ export default function Profile({ profile }: Props) {
             <div className="overflow-hidden rounded-2xl border border-border bg-card">
                 <Link
                     href="/profile/edit"
+                    prefetch="mount"
                     className="flex w-full cursor-pointer items-center justify-between border-b border-border px-4 py-3.5 text-left active:bg-secondary"
                 >
                     <span className="flex items-center gap-3 text-[14.5px]">
