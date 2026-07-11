@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Traits\PresentsMembers;
 use App\Models\Event;
+use App\Models\Expense;
 use App\Models\Group;
 use App\Models\Member;
 use App\Services\BalanceService;
@@ -102,6 +103,30 @@ class GroupController extends Controller
                 'participants_count' => $event->participants_count,
                 'total_minor' => (int) ($event->total_minor ?? 0),
             ]),
+        ]);
+    }
+
+    // total spent per calendar month, newest first; grouped in PHP so it stays
+    // portable across sqlite/pgsql without date-format sql functions
+    public function stats(Request $request, Group $group)
+    {
+        $this->authorize('view', $group);
+
+        $eventIds = $group->events()->pluck('id');
+
+        $months = Expense::whereIn('event_id', $eventIds)
+            ->get(['spent_at', 'amount_minor'])
+            ->groupBy(fn (Expense $expense) => $expense->spent_at->format('Y-m'))
+            ->map(fn ($expenses, string $month) => [
+                'month' => $month,
+                'total_minor' => (int) $expenses->sum('amount_minor'),
+            ])
+            ->sortKeysDesc()
+            ->values();
+
+        return Inertia::render('groups/stats', [
+            'group' => ['uuid' => $group->uuid, 'name' => $group->name, 'currency' => $group->currency],
+            'months' => $months,
         ]);
     }
 

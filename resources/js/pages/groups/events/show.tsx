@@ -1,5 +1,5 @@
 import { Link, router } from '@inertiajs/react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Drawer, DrawerContent, DrawerTitle } from '@/components/ui/drawer';
 import { AppShell, BackButton, Fab } from '@/components/web/app-shell';
 import { MemberAvatar } from '@/components/web/member-avatar';
@@ -81,6 +81,7 @@ export default function EventShow({ group, event, participants, expenses, settle
                     group={group}
                     baseUrl={baseUrl}
                     membersByUuid={membersByUuid}
+                    myUuid={participants.find((m) => m.is_me)?.uuid}
                     transfers={transfers}
                     settlements={settlements}
                     hasExpenses={expenses.length > 0}
@@ -180,15 +181,19 @@ interface SettleTabProps {
     group: { uuid: string; currency: string };
     baseUrl: string;
     membersByUuid: Map<string, MemberData>;
+    myUuid?: string;
     transfers: TransferData[];
     settlements: SettlementData[];
     hasExpenses: boolean;
 }
 
-function SettleTab({ group, baseUrl, membersByUuid, transfers: initialTransfers, settlements: initialSettlements, hasExpenses }: SettleTabProps) {
+function SettleTab({ group, baseUrl, membersByUuid, myUuid, transfers: initialTransfers, settlements: initialSettlements, hasExpenses }: SettleTabProps) {
     const [transfers, setTransfers] = useState(initialTransfers);
     const [settlements, setSettlements] = useState(initialSettlements);
+    // suggestions paid this session stay visible as disabled "paid" cards
+    const [paid, setPaid] = useState<TransferData[]>([]);
     const [confirm, setConfirm] = useState<TransferData | null>(null);
+    const posting = useRef(false);
     const [, copy] = useClipboard();
     const [copied, setCopied] = useState(false);
     const [copiedAlias, setCopiedAlias] = useState<string | null>(null);
@@ -200,6 +205,13 @@ function SettleTab({ group, baseUrl, membersByUuid, transfers: initialTransfers,
     const name = (uuid: string) => membersByUuid.get(uuid)?.display_name ?? '?';
     const toMember = confirm ? membersByUuid.get(confirm.to_member_uuid) : null;
 
+    const isMine = (t: TransferData) => t.from_member_uuid === myUuid;
+    const mineUnpaid = transfers.filter(isMine);
+    const othersUnpaid = transfers.filter((t) => !isMine(t));
+    const minePaid = paid.filter(isMine);
+    const othersPaid = paid.filter((t) => !isMine(t));
+    const allSettled = transfers.length === 0 && paid.length === 0 && hasExpenses;
+
     const copyCardAlias = async (memberUuid: string) => {
         const alias = membersByUuid.get(memberUuid)?.payment_alias;
         if (!alias) return;
@@ -209,7 +221,8 @@ function SettleTab({ group, baseUrl, membersByUuid, transfers: initialTransfers,
     };
 
     const confirmPayment = () => {
-        if (!confirm) return;
+        if (!confirm || posting.current) return;
+        posting.current = true;
         const transfer = confirm;
 
         const optimistic: SettlementData = {
@@ -220,9 +233,10 @@ function SettleTab({ group, baseUrl, membersByUuid, transfers: initialTransfers,
             from: { uuid: transfer.from_member_uuid, display_name: name(transfer.from_member_uuid) },
             to: { uuid: transfer.to_member_uuid, display_name: name(transfer.to_member_uuid) },
         };
-        // record the payment and drop the matching suggestion right away
+        // record the payment and flip the suggestion to its paid state right away
         setSettlements((prev) => [optimistic, ...prev]);
         setTransfers((prev) => prev.filter((t) => t !== transfer));
+        setPaid((prev) => [...prev, transfer]);
         setConfirm(null);
 
         router.post(
@@ -237,10 +251,27 @@ function SettleTab({ group, baseUrl, membersByUuid, transfers: initialTransfers,
                 only: ['settlements', 'balances', 'transfers', 'event'],
                 onError: () => {
                     setSettlements((prev) => prev.filter((s) => s.uuid !== optimistic.uuid));
+                    setPaid((prev) => prev.filter((t) => t !== transfer));
                     setTransfers((prev) => [...prev, transfer]);
+                },
+                onFinish: () => {
+                    posting.current = false;
                 },
             },
         );
+    };
+
+    // deleting a recorded payment revives the suggestion, so drop its paid card
+    const dropPaidCard = (settlement: SettlementData) => {
+        setPaid((prev) => {
+            const index = prev.findIndex(
+                (t) =>
+                    t.from_member_uuid === settlement.from.uuid &&
+                    t.to_member_uuid === settlement.to.uuid &&
+                    t.amount_minor === settlement.amount_minor,
+            );
+            return index === -1 ? prev : prev.filter((_, i) => i !== index);
+        });
     };
 
     const copyAlias = async () => {
@@ -250,9 +281,81 @@ function SettleTab({ group, baseUrl, membersByUuid, transfers: initialTransfers,
         setTimeout(() => setCopied(false), 1600);
     };
 
+    const transferCard = (transfer: TransferData, key: string, options: { paid?: boolean; dimmed?: boolean } = {}) => {
+        const receiver = membersByUuid.get(transfer.to_member_uuid);
+        return (
+            <div
+                key={key}
+                className={`rounded-2xl border border-border bg-card p-3.5 ${options.paid ? 'opacity-70' : options.dimmed ? 'opacity-80' : ''}`}
+            >
+                <div className="flex items-center gap-2.5">
+                    <div className="flex flex-none -space-x-1.5">
+                        <MemberAvatar name={name(transfer.from_member_uuid)} size="sm" className="ring-2 ring-card" />
+                        <MemberAvatar name={name(transfer.to_member_uuid)} size="sm" className="ring-2 ring-card" />
+                    </div>
+                    <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-medium">
+                        <span className="truncate">{name(transfer.from_member_uuid)}</span>
+                        <ArrowRight className="size-4 flex-none text-muted-foreground" />
+                        <span className="truncate">{name(transfer.to_member_uuid)}</span>
+                    </div>
+                    {options.paid && <CheckCircle2 className="size-4 flex-none text-emerald-500" />}
+                    <span className="flex-none text-[15px] font-semibold tabular-nums">
+                        {formatMoney(transfer.amount_minor, group.currency)}
+                    </span>
+                </div>
+
+                {!options.paid && receiver?.payment_alias && (
+                    <button
+                        type="button"
+                        onClick={() => copyCardAlias(transfer.to_member_uuid)}
+                        className="mt-3 flex w-full cursor-pointer items-center justify-between rounded-[11px] border border-border bg-background px-3 py-2.5 text-left active:scale-[0.98]"
+                    >
+                        <span className="min-w-0">
+                            <span className="block text-[10.5px] text-muted-foreground uppercase tracking-wide">
+                                {t('groups:payment_alias')}
+                            </span>
+                            <span className="block truncate text-[13.5px] font-semibold select-all">
+                                {receiver.payment_alias}
+                            </span>
+                        </span>
+                        {copiedAlias === transfer.to_member_uuid ? (
+                            <Check className="size-4 flex-none text-emerald-500" />
+                        ) : (
+                            <Copy className="size-4 flex-none text-muted-foreground" />
+                        )}
+                    </button>
+                )}
+
+                {options.paid ? (
+                    <button
+                        type="button"
+                        disabled
+                        className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-[11px] border border-border text-[13.5px] font-semibold text-muted-foreground"
+                    >
+                        <Check className="size-4 text-emerald-500" />
+                        {t('groups:paid')}
+                    </button>
+                ) : (
+                    <button
+                        type="button"
+                        onClick={() => setConfirm(transfer)}
+                        className={`mt-3 flex h-11 w-full cursor-pointer items-center justify-center gap-2 rounded-[11px] text-[13.5px] font-semibold active:scale-[0.98] ${
+                            options.dimmed ? 'bg-secondary text-muted-foreground' : 'bg-primary text-primary-foreground'
+                        }`}
+                    >
+                        <HandCoins className="size-4" />
+                        {t('groups:pay')}
+                    </button>
+                )}
+            </div>
+        );
+    };
+
+    const transferKey = (t: TransferData, i: number) => `${t.from_member_uuid}|${t.to_member_uuid}|${t.amount_minor}|${i}`;
+
     return (
         <div className="pt-2">
-            {transfers.length === 0 && hasExpenses ? (
+            {allSettled && (
                 <div className="flex flex-col items-center px-8 pt-10 pb-6 text-center">
                     <div className="mb-4 flex size-15 items-center justify-center rounded-full border border-border bg-secondary text-emerald-500">
                         <Check className="size-7" strokeWidth={2.2} />
@@ -260,66 +363,29 @@ function SettleTab({ group, baseUrl, membersByUuid, transfers: initialTransfers,
                     <div className="text-[17px] font-bold">{t('groups:all_settled_title')}</div>
                     <div className="mt-1.5 max-w-62 text-[13.5px] leading-relaxed text-muted-foreground">{t('groups:all_settled_hint')}</div>
                 </div>
-            ) : (
-                transfers.length > 0 && (
-                    <>
-                        <div className="px-1 pb-2 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{t('groups:suggestions')}</div>
-                        <div className="flex flex-col gap-2.5">
-                            {transfers.map((transfer, i) => {
-                                const receiver = membersByUuid.get(transfer.to_member_uuid);
-                                return (
-                                    <div key={i} className="rounded-2xl border border-border bg-card p-3.5">
-                                        <div className="flex items-center gap-2.5">
-                                            <div className="flex flex-none -space-x-1.5">
-                                                <MemberAvatar name={name(transfer.from_member_uuid)} size="sm" className="ring-2 ring-card" />
-                                                <MemberAvatar name={name(transfer.to_member_uuid)} size="sm" className="ring-2 ring-card" />
-                                            </div>
-                                            <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-medium">
-                                                <span className="truncate">{name(transfer.from_member_uuid)}</span>
-                                                <ArrowRight className="size-4 flex-none text-muted-foreground" />
-                                                <span className="truncate">{name(transfer.to_member_uuid)}</span>
-                                            </div>
-                                            <span className="flex-none text-[15px] font-semibold tabular-nums">
-                                                {formatMoney(transfer.amount_minor, group.currency)}
-                                            </span>
-                                        </div>
+            )}
 
-                                        {receiver?.payment_alias && (
-                                            <button
-                                                type="button"
-                                                onClick={() => copyCardAlias(transfer.to_member_uuid)}
-                                                className="mt-3 flex w-full cursor-pointer items-center justify-between rounded-[11px] border border-border bg-background px-3 py-2.5 text-left active:scale-[0.98]"
-                                            >
-                                                <span className="min-w-0">
-                                                    <span className="block text-[10.5px] text-muted-foreground uppercase tracking-wide">
-                                                        {t('groups:payment_alias')}
-                                                    </span>
-                                                    <span className="block truncate text-[13.5px] font-semibold select-all">
-                                                        {receiver.payment_alias}
-                                                    </span>
-                                                </span>
-                                                {copiedAlias === transfer.to_member_uuid ? (
-                                                    <Check className="size-4 flex-none text-emerald-500" />
-                                                ) : (
-                                                    <Copy className="size-4 flex-none text-muted-foreground" />
-                                                )}
-                                            </button>
-                                        )}
+            {mineUnpaid.length + minePaid.length > 0 && (
+                <>
+                    <div className="px-1 pb-2 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{t('groups:your_payments')}</div>
+                    <div className="flex flex-col gap-2.5">
+                        {mineUnpaid.map((transfer, i) => transferCard(transfer, transferKey(transfer, i)))}
+                        {minePaid.map((transfer, i) => transferCard(transfer, `paid-${transferKey(transfer, i)}`, { paid: true }))}
+                    </div>
+                </>
+            )}
 
-                                        <button
-                                            type="button"
-                                            onClick={() => setConfirm(transfer)}
-                                            className="mt-3 flex h-11 w-full cursor-pointer items-center justify-center gap-2 rounded-[11px] bg-primary text-[13.5px] font-semibold text-primary-foreground active:scale-[0.98]"
-                                        >
-                                            <HandCoins className="size-4" />
-                                            {t('groups:pay')}
-                                        </button>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </>
-                )
+            {othersUnpaid.length + othersPaid.length > 0 && (
+                <>
+                    <div className={`flex items-center gap-3 px-1 pb-2 ${mineUnpaid.length + minePaid.length > 0 ? 'mt-5' : ''}`}>
+                        <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">{t('groups:between_others')}</span>
+                        <div className="h-px flex-1 bg-border" />
+                    </div>
+                    <div className="flex flex-col gap-2.5">
+                        {othersUnpaid.map((transfer, i) => transferCard(transfer, transferKey(transfer, i), { dimmed: true }))}
+                        {othersPaid.map((transfer, i) => transferCard(transfer, `paid-${transferKey(transfer, i)}`, { paid: true, dimmed: true }))}
+                    </div>
+                </>
             )}
 
             {settlements.length > 0 && (
@@ -344,6 +410,7 @@ function SettleTab({ group, baseUrl, membersByUuid, transfers: initialTransfers,
                                     onClick={() => {
                                         const removed = settlement;
                                         setSettlements((prev) => prev.filter((s) => s.uuid !== removed.uuid));
+                                        dropPaidCard(removed);
                                         router.delete(`${baseUrl}/settlements/${removed.uuid}`, {
                                             preserveScroll: true,
                                             only: ['settlements', 'balances', 'transfers', 'event'],

@@ -30,6 +30,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('quick', [GroupController::class, 'storeQuick'])->name('groups.quick.store');
         Route::post('/', [GroupController::class, 'store'])->name('groups.store');
         Route::get('{group}', [GroupController::class, 'show'])->name('groups.show');
+        Route::get('{group}/stats', [GroupController::class, 'stats'])->name('groups.stats');
         Route::get('{group}/edit', [GroupController::class, 'edit'])->name('groups.edit');
         Route::post('{group}', [GroupController::class, 'update'])->name('groups.update');
         Route::delete('{group}', [GroupController::class, 'destroy'])->name('groups.destroy');

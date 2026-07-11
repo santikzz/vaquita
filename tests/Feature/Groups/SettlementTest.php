@@ -128,6 +128,48 @@ test('deleting a settlement reopens the event', function () {
 // validation
 // ---------------------------------------------------------------------------
 
+test('the same settlement cannot be recorded twice', function () {
+    $payload = [
+        'from_member' => $this->member->uuid,
+        'to_member' => $this->ownerMember->uuid,
+        'amount_minor' => 500,
+    ];
+
+    $this->actingAs($this->memberUser)->post("{$this->eventUrl}/settlements", $payload)->assertSessionHasNoErrors();
+    $this->actingAs($this->owner)->post("{$this->eventUrl}/settlements", $payload)->assertSessionHasErrors('amount_minor');
+
+    expect(Settlement::count())->toBe(1);
+
+    // balances stay settled instead of flipping into a reversed debt
+    $service = app(BalanceService::class);
+    expect($service->suggestTransfers($service->balances($this->event)))->toBe([]);
+});
+
+test('a settlement cannot exceed what the payer owes', function () {
+    $this->actingAs($this->memberUser)
+        ->post("{$this->eventUrl}/settlements", [
+            'from_member' => $this->member->uuid,
+            'to_member' => $this->ownerMember->uuid,
+            'amount_minor' => 600,
+        ])
+        ->assertSessionHasErrors('amount_minor');
+
+    expect(Settlement::count())->toBe(0);
+});
+
+test('a settlement cannot pay someone who is not owed', function () {
+    // owner is the creditor here, so a payment towards the member must be rejected
+    $this->actingAs($this->owner)
+        ->post("{$this->eventUrl}/settlements", [
+            'from_member' => $this->ownerMember->uuid,
+            'to_member' => $this->member->uuid,
+            'amount_minor' => 500,
+        ])
+        ->assertSessionHasErrors('amount_minor');
+
+    expect(Settlement::count())->toBe(0);
+});
+
 test('a settlement cannot pay yourself', function () {
     $this->actingAs($this->memberUser)
         ->post("{$this->eventUrl}/settlements", [
